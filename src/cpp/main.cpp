@@ -2,7 +2,7 @@
 
 using namespace std;
 
-// add function you wanna test...
+// add function you wanna test
 
 int main() {
 
