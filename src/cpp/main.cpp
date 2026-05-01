@@ -2,6 +2,8 @@
 
 using namespace std;
 
+// add function you wanna test...
+
 int main() {
 
 }
