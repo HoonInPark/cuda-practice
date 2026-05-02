@@ -1,8 +1,7 @@
-#include <cuda_runtime.h>
+#include <iostream>
+#include "module/prefix-sum.cuh"
 
 using namespace std;
-
-// add function you wanna test
 
 int main() {
 
