@@ -1,8 +1,11 @@
-#include <iostream>
 #include "module/prefix-sum.cuh"
 
-using namespace std;
+constexpr int kMax = 1024;
 
 int main() {
+  vector<int> Nums;
+  MakeIncrementalNums(Nums, kMax);
+
+  KoggeStoneScan(Nums);
 
 }
