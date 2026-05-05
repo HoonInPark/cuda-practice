@@ -6,5 +6,5 @@ using namespace std;
 void MakeIncrementalNums(vector<int> &Nums, int maxNum);
 
 void KoggeStoneScan(vector<int> &Nums);
-__global__ void KoggeStoneScanEntry();
-__device__ void KoggeStoneScan();
+__global__ void KoggeStoneScan_Entry();
+__device__ void KoggeStoneScan_SingleRound();
