@@ -4,7 +4,7 @@
 #include <iostream>
 #include <ostream>
 
-constexpr size_t kBlockNum = 128;
+constexpr size_t kBlockSize = 128;
 
 void MakeIncrementalNums(vector<int> &Nums, int maxNum) {
   Nums.reserve(maxNum);
@@ -14,14 +14,20 @@ void MakeIncrementalNums(vector<int> &Nums, int maxNum) {
 }
 
 void KoggeStoneScan_Entry(vector<int> &Nums) {
-  // allocate vram block with device pointer and its size
+  // allocate vram with device pointer and its size
   int *devPtr;
-  const size_t blockSize = sizeof(int) * Nums.size();
-  cudaMalloc(&devPtr, blockSize);
+  const size_t devMemSize = sizeof(int) * Nums.size();
+  cudaMalloc(&devPtr, devMemSize);
 
-  // copy
-  auto ret = cudaMemcpyAsync(devPtr, Nums.data(), blockSize, cudaMemcpyHostToDevice);
-  if (ret) {
+  /**
+   * u can see stream use cases in the post below :
+   * https://hayunjong83.tistory.com/28
+   */
+  cudaStream_t stream;
+  cudaStreamCreate(&stream);
+
+  // copy H2D
+  if (auto ret = cudaMemcpyAsync(devPtr, Nums.data(), devMemSize, cudaMemcpyHostToDevice, stream)) {
     cout << "cuda Error return code : " << ret << endl;
     return;
   }
@@ -31,20 +37,15 @@ void KoggeStoneScan_Entry(vector<int> &Nums) {
    * kernel<<<10, 256>>>(...);
    * and there are 10 blocks and each block has 256 threads
    */
-
-  /**
-   * u can see stream use cases in the post below :
-   * https://hayunjong83.tistory.com/28
-   *
-   */
-  cudaStream_t* stream;
-  cudaStreamCreate(stream);
-
-  auto gridNum = Nums.size() / kBlockNum + 1;
   auto roundNum = static_cast<size_t>(log2(Nums.size())) + 1;
 
   for (size_t i = 0; i < roundNum; i++) {
-    KoggeStoneScan<<<gridNum, kBlockNum, stream>>>(devPtr);
+
+  }
+
+  // copy D2H
+  if (auto ret = cudaMemcpyAsync(Nums.data(), devPtr, devMemSize, cudaMemcpyDeviceToHost, stream)) {
+    cout << "cuda Error return code : " << ret << endl;
   }
 
   // dealloc
@@ -53,5 +54,5 @@ void KoggeStoneScan_Entry(vector<int> &Nums) {
 }
 
 __global__ void KoggeStoneScan(int *devPtr) {
-  auto idx = blockIdx.x + threadIdx.x;
+
 }
