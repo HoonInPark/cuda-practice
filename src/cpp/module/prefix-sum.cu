@@ -54,7 +54,9 @@ void KoggeStoneScan_Entry(vector<int>& nums) {
   cudaStreamDestroy(stream);
 }
 
-__global__ void KoggeStoneScan(int* devPtr, const size_t total_size, const size_t round, const size_t start_offset) {
-  size_t g_idx = start_offset + blockIdx.x * kBlockSize + threadIdx.x;
-  
+__global__ void KoggeStoneScan(int* dev_ptr, const size_t total_size, const size_t round, const size_t start_offset) {
+  // if 1 dim block as this, blockDim.x is same and more flexible rather than kBlockSize.
+  // my team leader said for extreme optimization, g_idx calculation can be replaced as dim value.
+  const size_t g_idx = start_offset + blockIdx.x * blockDim.x + threadIdx.x;
+  dev_ptr[g_idx] = dev_ptr[g_idx] + dev_ptr[g_idx - static_cast<size_t>(powf(2, round))];
 }
