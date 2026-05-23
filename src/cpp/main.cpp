@@ -3,9 +3,9 @@
 constexpr int kMax = 1024;
 
 int main() {
-  vector<int> Nums;
-  MakeIncrementalNums(Nums, kMax);
+  vector<int> nums;
+  MakeIncrementalNums(nums, kMax);
 
-  KoggeStoneScan_Entry(Nums);
+  KoggeStoneScan_Entry(nums);
 
 }
