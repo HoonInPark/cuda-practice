@@ -6,6 +6,6 @@ int main() {
   vector<int> Nums;
   MakeIncrementalNums(Nums, kMax);
 
-  KoggeStoneScan(Nums);
+  KoggeStoneScan_Entry(Nums);
 
 }
