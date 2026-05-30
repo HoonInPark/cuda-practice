@@ -21,12 +21,16 @@ void KoggeStoneScan_Entry(vector<int>& nums) {
   cudaStreamCreate(&stream);
 
   // allocate vram with device pointer and its size
-  int* dev_ptr;
-  const size_t dev_mem_size = sizeof(int) * nums.size();
-  cudaMalloc(&dev_ptr, dev_mem_size);
+  const size_t buff_size = sizeof(int) * nums.size();
+
+  int* dev_ptr_even;
+  cudaMalloc(&dev_ptr_even, buff_size);
+
+  int* dev_ptr_odd;
+  cudaMalloc(&dev_ptr_odd, buff_size);
 
   // copy H2D
-  if (auto ret = cudaMemcpyAsync(dev_ptr, nums.data(), dev_mem_size, cudaMemcpyHostToDevice, stream)) {
+  if (auto ret = cudaMemcpyAsync(dev_ptr_even, nums.data(), buff_size, cudaMemcpyHostToDevice, stream)) {
     cout << "cuda Error return code : " << ret << endl;
     return;
   }
@@ -39,24 +43,42 @@ void KoggeStoneScan_Entry(vector<int>& nums) {
   const auto round_total = static_cast<size_t>(log2(nums.size())) + 1;
   for (size_t round = 0; round < round_total; round++) {
     const auto empty_front_num = static_cast<size_t>(powf(2, round));
-    KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(dev_ptr, nums.size(), round, empty_front_num);
+    if (0 == round % 2) {
+      // even round : from even to odd
+      if (auto ret = cudaMemcpyAsync(dev_ptr_odd, dev_ptr_even, sizeof(int) * empty_front_num, cudaMemcpyDeviceToDevice, stream)) {
+        cout << "cuda Error return code : " << ret << endl;
+        return;
+      }
+
+      KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(dev_ptr_odd, dev_ptr_even, nums.size(), round, empty_front_num);
+    } else {
+      // odd round : from odd to even
+      if (auto ret = cudaMemcpyAsync(dev_ptr_even, dev_ptr_odd, sizeof(int) * empty_front_num, cudaMemcpyDeviceToDevice, stream)) {
+        cout << "cuda Error return code : " << ret << endl;
+        return;
+      }
+
+      KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(dev_ptr_even, dev_ptr_odd, nums.size(), round, empty_front_num);
+    }
   }
 
   // copy D2H
-  if (auto ret = cudaMemcpyAsync(nums.data(), dev_ptr, dev_mem_size, cudaMemcpyDeviceToHost, stream)) {
+  auto res_ptr = round_total % 2 ? dev_ptr_odd : dev_ptr_even;
+  if (auto ret = cudaMemcpyAsync(nums.data(), res_ptr, buff_size, cudaMemcpyDeviceToHost, stream)) {
     cout << "cuda Error return code : " << ret << endl;
   }
 
   // dealloc
   cudaDeviceSynchronize();
-  cudaFree(dev_ptr);
+  cudaFree(dev_ptr_even);
+  cudaFree(dev_ptr_odd);
 
   cudaStreamDestroy(stream);
 }
 
-__global__ void KoggeStoneScan(int* dev_ptr, const size_t total_size, const size_t round, const size_t start_offset) {
+__global__ void KoggeStoneScan(int* dst, int* src, size_t total_size, size_t round, size_t start_offset) {
   // if 1 dim block as this, blockDim.x is same and more flexible rather than kBlockSize.
   // my team leader said for extreme optimization, g_idx calculation can be replaced as dim value.
   const size_t g_idx = start_offset + blockIdx.x * blockDim.x + threadIdx.x;
-  dev_ptr[g_idx] = dev_ptr[g_idx] + dev_ptr[g_idx - static_cast<size_t>(powf(2, round))];
+  dst[g_idx] = src[g_idx] + src[g_idx - static_cast<size_t>(powf(2, round))];
 }
