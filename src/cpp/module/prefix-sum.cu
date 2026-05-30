@@ -41,6 +41,14 @@ void KoggeStoneScan_Entry(vector<int>& nums) {
    * and there are 10 blocks and each block has 256 threads
    */
   const auto round_total = static_cast<size_t>(log2(nums.size())) + 1;
+
+  // timer settings /////////
+  cudaEvent_t start, stop;
+  cudaEventCreate(&start);
+  cudaEventCreate(&stop);
+  ///////////////////////////
+
+  cudaEventRecord(start, stream);
   for (size_t round = 0; round < round_total; round++) {
     const auto empty_front_num = static_cast<size_t>(powf(2, round));
     if (0 == round % 2) {
@@ -61,6 +69,14 @@ void KoggeStoneScan_Entry(vector<int>& nums) {
       KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(dev_ptr_even, dev_ptr_odd, nums.size(), round, empty_front_num);
     }
   }
+
+  // timer settings /////////
+  cudaEventRecord(stop, stream);
+  cudaEventSynchronize(stop);
+  float elapsed_ms = 0.0f;
+  cudaEventElapsedTime(&elapsed_ms, start, stop);
+  cout << "cuda timer : " << elapsed_ms << endl;
+  ///////////////////////////
 
   // copy D2H
   auto res_ptr = round_total % 2 ? dev_ptr_odd : dev_ptr_even;

@@ -1,6 +1,6 @@
 #include "module/prefix-sum.cuh"
 
-constexpr int kMax = 63;
+constexpr int kMax = 1024;
 
 int main() {
   vector<int> nums;
