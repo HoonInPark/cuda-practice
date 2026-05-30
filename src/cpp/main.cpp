@@ -1,11 +1,14 @@
 #include "module/prefix-sum.cuh"
 
-constexpr int kMax = 1024;
+constexpr unsigned long long kMax = 1024 * 1024;
 
 int main() {
-  vector<int> nums;
-  MakeIncrementalNums(nums, kMax);
+  vector<unsigned long long> nums;
 
-  KoggeStoneScan_Entry(nums);
+  TestBed tb;
 
+  tb.MakeIncrementalNums(nums, kMax);
+  tb.KoggeStoneScan_Entry(nums);
+
+  return 0;
 }

@@ -4,33 +4,90 @@
 #include <iostream>
 #include <ostream>
 
-constexpr size_t kBlockSize = 32;
+__global__ void MakeIncrementalNums_CUDA(ull* dev_ptr, size_t size) {
+  const size_t g_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
-void MakeIncrementalNums(vector<int>& nums, int max_num) {
-  nums.reserve(max_num);
-  for (int i = 1; i < max_num + 1; i++)
-    nums.push_back(i);
+  if (g_idx >= size) {
+    return;
+  }
+
+  dev_ptr[g_idx] = static_cast<ull>(g_idx);
 }
 
-void KoggeStoneScan_Entry(vector<int>& nums) {
+__global__ void KoggeStoneScan(ull* dst, ull* src, size_t total_size, size_t round, size_t start_offset) {
+  // if 1 dim block as this, blockDim.x is same and more flexible rather than kBlockSize.
+  // my team leader said for extreme optimization, g_idx calculation can be replaced as dim value.
+  const size_t g_idx = start_offset + blockIdx.x * blockDim.x + threadIdx.x;
+  if (g_idx > total_size - 1) {
+    return;
+  }
+
+  dst[g_idx] = src[g_idx] + src[g_idx - static_cast<size_t>(powf(2, round))];
+}
+
+TestBed::TestBed() {
+  cudaDeviceProp prop;
+  cudaGetDeviceProperties(&prop, 0);
+  cout << "shared memory size : " << prop.sharedMemPerBlock << endl;
+
+  cudaStreamCreate(&stream_);
+
+  // timer settings /////////
+  cudaEventCreate(&start_);
+  cudaEventCreate(&stop_);
+  ///////////////////////////
+}
+
+TestBed::~TestBed() {
+  cudaStreamDestroy(stream_);
+}
+
+// ull => 8 byte
+// size_t => 8 byte in 64 bit os
+void TestBed::MakeIncrementalNums(vector<ull>& nums, ull max_num) {
+  nums.resize(max_num);
+  // for (ull i = 1; i < max_num + 1; i++)
+  //   nums.push_back(i);
+
+  ull* dev_ptr;
+  size_t buff_size = sizeof(ull) * max_num;
+  cudaMalloc(&dev_ptr, buff_size);
+
+  cudaEventRecord(start_, stream_);
+  MakeIncrementalNums_CUDA<<<(max_num - 1) / kBlockSize + 1, kBlockSize, 0, stream_>>>(dev_ptr, max_num);
+  cudaEventRecord(stop_, stream_);
+  cudaEventSynchronize(stop_);
+
+  float elapsed_ms = 0.0f;
+  cudaEventElapsedTime(&elapsed_ms, start_, stop_);
+
+  cout << "MakeIncrementalNums_CUDA : " << elapsed_ms << " ms" << endl;
+
+  cudaMemcpyAsync(nums.data(), dev_ptr, sizeof(ull) * nums.size(), cudaMemcpyDeviceToHost, stream_);
+
+  cudaStreamSynchronize(stream_);
+  cudaFree(dev_ptr);
+
+  cout << "last num for check : " << nums[nums.size() - 1] << endl;
+}
+
+void TestBed::KoggeStoneScan_Entry(vector<ull>& nums) {
   /**
    * u can see stream use cases in the post below :
    * https://hayunjong83.tistory.com/28
    */
-  cudaStream_t stream;
-  cudaStreamCreate(&stream);
 
   // allocate vram with device pointer and its size
-  const size_t buff_size = sizeof(int) * nums.size();
+  const size_t buff_size = sizeof(ull) * nums.size();
 
-  int* dev_ptr_even;
+  ull* dev_ptr_even;
   cudaMalloc(&dev_ptr_even, buff_size);
 
-  int* dev_ptr_odd;
+  ull* dev_ptr_odd;
   cudaMalloc(&dev_ptr_odd, buff_size);
 
   // copy H2D
-  if (auto ret = cudaMemcpyAsync(dev_ptr_even, nums.data(), buff_size, cudaMemcpyHostToDevice, stream)) {
+  if (auto ret = cudaMemcpyAsync(dev_ptr_even, nums.data(), buff_size, cudaMemcpyHostToDevice, stream_)) {
     cout << "cuda Error return code : " << ret << endl;
     return;
   }
@@ -42,63 +99,48 @@ void KoggeStoneScan_Entry(vector<int>& nums) {
    */
   const auto round_total = static_cast<size_t>(log2(nums.size())) + 1;
 
-  // timer settings /////////
-  cudaEvent_t start, stop;
-  cudaEventCreate(&start);
-  cudaEventCreate(&stop);
-  ///////////////////////////
-
-  cudaEventRecord(start, stream);
+  cudaEventRecord(start_, stream_);
   for (size_t round = 0; round < round_total; round++) {
     const auto empty_front_num = static_cast<size_t>(powf(2, round));
     if (0 == round % 2) {
       // even round : from even to odd
-      if (auto ret = cudaMemcpyAsync(dev_ptr_odd, dev_ptr_even, sizeof(int) * empty_front_num, cudaMemcpyDeviceToDevice, stream)) {
+      if (auto ret = cudaMemcpyAsync(dev_ptr_odd, dev_ptr_even, sizeof(ull) * empty_front_num, cudaMemcpyDeviceToDevice, stream_)) {
         cout << "cuda Error return code : " << ret << endl;
         return;
       }
 
-      KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(dev_ptr_odd, dev_ptr_even, nums.size(), round, empty_front_num);
+      KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream_>>>(dev_ptr_odd, dev_ptr_even, nums.size(), round, empty_front_num);
     } else {
       // odd round : from odd to even
-      if (auto ret = cudaMemcpyAsync(dev_ptr_even, dev_ptr_odd, sizeof(int) * empty_front_num, cudaMemcpyDeviceToDevice, stream)) {
+      if (auto ret = cudaMemcpyAsync(dev_ptr_even, dev_ptr_odd, sizeof(ull) * empty_front_num, cudaMemcpyDeviceToDevice, stream_)) {
         cout << "cuda Error return code : " << ret << endl;
         return;
       }
 
-      KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream>>>(dev_ptr_even, dev_ptr_odd, nums.size(), round, empty_front_num);
+      KoggeStoneScan<<<(nums.size() - empty_front_num + kBlockSize - 1) / kBlockSize, kBlockSize, 0, stream_>>>(dev_ptr_even, dev_ptr_odd, nums.size(), round, empty_front_num);
     }
   }
 
   // timer settings /////////
-  cudaEventRecord(stop, stream);
-  cudaEventSynchronize(stop);
+  cudaEventRecord(stop_, stream_);
+  cudaEventSynchronize(stop_);
   float elapsed_ms = 0.0f;
-  cudaEventElapsedTime(&elapsed_ms, start, stop);
-  cout << "cuda timer : " << elapsed_ms << endl;
+  cudaEventElapsedTime(&elapsed_ms, start_, stop_);
+  cout << "KoggeStoneScan : " << elapsed_ms << " ms" << endl;
   ///////////////////////////
 
   // copy D2H
   auto res_ptr = round_total % 2 ? dev_ptr_odd : dev_ptr_even;
-  if (auto ret = cudaMemcpyAsync(nums.data(), res_ptr, buff_size, cudaMemcpyDeviceToHost, stream)) {
+  if (auto ret = cudaMemcpyAsync(nums.data(), res_ptr, buff_size, cudaMemcpyDeviceToHost, stream_)) {
     cout << "cuda Error return code : " << ret << endl;
   }
 
   // dealloc
-  cudaDeviceSynchronize();
+  cudaStreamSynchronize(stream_);
   cudaFree(dev_ptr_even);
   cudaFree(dev_ptr_odd);
-
-  cudaStreamDestroy(stream);
 }
 
-__global__ void KoggeStoneScan(int* dst, int* src, size_t total_size, size_t round, size_t start_offset) {
-  // if 1 dim block as this, blockDim.x is same and more flexible rather than kBlockSize.
-  // my team leader said for extreme optimization, g_idx calculation can be replaced as dim value.
-  const size_t g_idx = start_offset + blockIdx.x * blockDim.x + threadIdx.x;
-  if (g_idx > total_size - 1) {
-    return;
-  }
+void TestBed::BlellockScan_Entry(vector<ull>& nums) {
 
-  dst[g_idx] = src[g_idx] + src[g_idx - static_cast<size_t>(powf(2, round))];
 }

@@ -3,7 +3,21 @@
 
 using namespace std;
 
-void MakeIncrementalNums(vector<int>& nums, int max_num);
-void KoggeStoneScan_Entry(vector<int>& nums);
+typedef unsigned long long ull;
 
-__global__ void KoggeStoneScan(int* dst, int* src, size_t total_size, size_t round, size_t start_offset);
+constexpr size_t kBlockSize = 256;
+
+class TestBed {
+public:
+  TestBed();
+  ~TestBed();
+
+  void MakeIncrementalNums(vector<ull>& nums, ull max_num);
+  void KoggeStoneScan_Entry(vector<ull>& nums);
+  void BlellockScan_Entry(vector<ull>& nums);
+
+private:
+  cudaStream_t stream_;
+  cudaEvent_t start_, stop_;
+};
+
