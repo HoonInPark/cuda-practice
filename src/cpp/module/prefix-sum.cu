@@ -29,6 +29,8 @@ TestBed::TestBed() {
   cudaDeviceProp prop;
   cudaGetDeviceProperties(&prop, 0);
   cout << "shared memory size : " << prop.sharedMemPerBlock << endl;
+  cout << "shared memory optin size : " << prop.sharedMemPerBlockOptin << endl;
+  cout << "mem size of sm shared for multiplt blocks : " << prop.sharedMemPerMultiprocessor << endl;
 
   cudaStreamCreate(&stream_);
 
