@@ -26,7 +26,7 @@ __global__ void KoggeStoneScan(ull* dst, ull* src, size_t total_size, size_t rou
 }
 
 TestBed::TestBed() {
-  cudaDeviceProp prop;
+  cudaDeviceProp prop{};
   cudaGetDeviceProperties(&prop, 0);
   cout << "shared memory size : " << prop.sharedMemPerBlock << endl;
   cout << "shared memory optin size : " << prop.sharedMemPerBlockOptin << endl;
@@ -146,3 +146,5 @@ void TestBed::KoggeStoneScan_Entry(vector<ull>& nums) {
 void TestBed::BlellockScan_Entry(vector<ull>& nums) {
 
 }
+
+bool TestBed::VerifyResult() {}
