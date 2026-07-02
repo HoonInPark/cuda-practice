@@ -3,8 +3,9 @@
 #include <cmath>
 #include <iostream>
 #include <ostream>
+#include <curand_kernel.h>
 
-__global__ void MakeIncrementalNums_CUDA(ull* dev_ptr, size_t size) {
+__global__ void MakeRandNums(ull* dev_ptr, size_t size) {
   const size_t g_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
   if (g_idx >= size) {
@@ -25,12 +26,18 @@ __global__ void KoggeStoneScan(ull* dst, ull* src, size_t total_size, size_t rou
   dst[g_idx] = src[g_idx] + src[g_idx - static_cast<size_t>(powf(2, round))];
 }
 
+__global__ void AdjacentDifference(ull* src, ull* res) {
+  const size_t g_idx = blockIdx.x * blockDim.x + threadIdx.x;
+
+
+}
+
 TestBed::TestBed() {
   cudaDeviceProp prop{};
   cudaGetDeviceProperties(&prop, 0);
   cout << "shared memory size : " << prop.sharedMemPerBlock << endl;
   cout << "shared memory optin size : " << prop.sharedMemPerBlockOptin << endl;
-  cout << "mem size of sm shared for multiplt blocks : " << prop.sharedMemPerMultiprocessor << endl;
+  cout << "mem size of sm shared for multiple blocks : " << prop.sharedMemPerMultiprocessor << endl;
 
   cudaStreamCreate(&stream_);
 
@@ -46,7 +53,7 @@ TestBed::~TestBed() {
 
 // ull => 8 byte
 // size_t => 8 byte in 64 bit os
-void TestBed::MakeIncrementalNums(vector<ull>& nums, ull max_num) {
+void TestBed::MakeRandNums_Entry(vector<ull>& nums, ull max_num) {
   nums.resize(max_num);
   // for (ull i = 1; i < max_num + 1; i++)
   //   nums.push_back(i);
@@ -56,7 +63,7 @@ void TestBed::MakeIncrementalNums(vector<ull>& nums, ull max_num) {
   cudaMalloc(&dev_ptr, buff_size);
 
   cudaEventRecord(start_, stream_);
-  MakeIncrementalNums_CUDA<<<(max_num - 1) / kBlockSize + 1, kBlockSize, 0, stream_>>>(dev_ptr, max_num);
+  MakeRandNums<<<(max_num - 1) / kBlockSize + 1, kBlockSize, 0, stream_>>>(dev_ptr, max_num);
   cudaEventRecord(stop_, stream_);
   cudaEventSynchronize(stop_);
 
@@ -147,4 +154,23 @@ void TestBed::BlellockScan_Entry(vector<ull>& nums) {
 
 }
 
-bool TestBed::VerifyResult() {}
+bool TestBed::VerifyResult(const vector<ull>& nums_src, const vector<ull>& nums_res) {
+  ull* dev_ptr_src;
+  cudaMalloc(&dev_ptr_src, nums_src.size() * sizeof(ull));
+
+  ull* dev_ptr_res;
+  cudaMalloc(&dev_ptr_res, nums_res.size() * sizeof(ull));
+
+  if (auto ret = cudaMemcpy(dev_ptr_src, nums_src.data(), nums_src.size() * sizeof(ull), cudaMemcpyHostToDevice)) {
+    cout << "cuda Error return code : " << ret << endl;
+    return false;
+  }
+  if (auto ret = cudaMemcpy(dev_ptr_res, nums_res.data(), nums_res.size() * sizeof(ull), cudaMemcpyHostToDevice)) {
+    cout << "cuda Error return code : " << ret << endl;
+    return false;
+  }
+
+
+
+  return true;
+}

@@ -7,7 +7,7 @@ int main() {
 
   TestBed tb;
 
-  tb.MakeIncrementalNums(nums, kMax);
+  tb.MakeRandNums_Entry(nums, kMax);
   tb.KoggeStoneScan_Entry(nums);
 
   return 0;
