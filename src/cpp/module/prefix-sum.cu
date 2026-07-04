@@ -5,6 +5,10 @@
 #include <ostream>
 #include <curand_kernel.h>
 
+__device__ int GetRand(curandState *s, int a, int b) {
+
+}
+
 __global__ void MakeRandNums(ull* dev_ptr, size_t size) {
   const size_t g_idx = blockIdx.x * blockDim.x + threadIdx.x;
 
@@ -169,8 +173,6 @@ bool TestBed::VerifyResult(const vector<ull>& nums_src, const vector<ull>& nums_
     cout << "cuda Error return code : " << ret << endl;
     return false;
   }
-
-
 
   return true;
 }
