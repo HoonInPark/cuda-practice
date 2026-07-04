@@ -1,28 +1,36 @@
 #include "prefix-sum.cuh"
 
 #include <cmath>
+#include <curand_kernel.h>
 #include <iostream>
 #include <ostream>
-#include <curand_kernel.h>
 
-__device__ int GetRand(curandState *s, int a, int b) {
+#define linear_idx (blockIdx.x * blockDim.x + threadIdx.x)
+constexpr size_t kBlockSize = 256;
 
+__global__ void InitCurand(curandStatePhilox4_32_10_t* states, ull seed) {
+
+  // 같은 seed, 다른 sequence
+  curand_init(seed, linear_idx, 0, &states[linear_idx]);
 }
 
-__global__ void MakeRandNums(ull* dev_ptr, size_t size) {
-  const size_t g_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
-  if (g_idx >= size) {
+__global__ void GenerateRandNums(curandStatePhilox4_32_10_t* states, ull* out, ull cnt, ull max_num) {
+  if (linear_idx >= cnt)
     return;
-  }
 
-  dev_ptr[g_idx] = static_cast<ull>(g_idx);
+  curandStatePhilox4_32_10_t local_state = states[linear_idx];
+
+  // 0 ~ n inclusive
+  ull r = curand(&local_state) % (max_num + 1);
+
+  out[linear_idx] = r;
+  states[linear_idx] = local_state;
 }
 
 __global__ void KoggeStoneScan(ull* dst, ull* src, size_t total_size, size_t round, size_t start_offset) {
   // if 1 dim block as this, blockDim.x is same and more flexible rather than kBlockSize.
   // my team leader said for extreme optimization, g_idx calculation can be replaced as dim value.
-  const size_t g_idx = start_offset + blockIdx.x * blockDim.x + threadIdx.x;
+  const size_t g_idx = start_offset + linear_idx;
   if (g_idx > total_size - 1) {
     return;
   }
@@ -30,9 +38,7 @@ __global__ void KoggeStoneScan(ull* dst, ull* src, size_t total_size, size_t rou
   dst[g_idx] = src[g_idx] + src[g_idx - static_cast<size_t>(powf(2, round))];
 }
 
-__global__ void AdjacentDifference(ull* src, ull* res) {
-  const size_t g_idx = blockIdx.x * blockDim.x + threadIdx.x;
-
+__global__ void CheckAdjacentDiff(ull* src, ull* res) {
 
 }
 
@@ -51,40 +57,44 @@ TestBed::TestBed() {
   ///////////////////////////
 }
 
-TestBed::~TestBed() {
-  cudaStreamDestroy(stream_);
-}
+TestBed::~TestBed() { cudaStreamDestroy(stream_); }
 
 // ull => 8 byte
 // size_t => 8 byte in 64 bit os
-void TestBed::MakeRandNums_Entry(vector<ull>& nums, ull max_num) {
-  nums.resize(max_num);
+void TestBed::MakeRandNums_CUDA(vector<ull>& nums, ull cnt, ull max_num) {
+  nums.resize(cnt);
   // for (ull i = 1; i < max_num + 1; i++)
   //   nums.push_back(i);
 
-  ull* dev_ptr;
-  size_t buff_size = sizeof(ull) * max_num;
-  cudaMalloc(&dev_ptr, buff_size);
-
   cudaEventRecord(start_, stream_);
-  MakeRandNums<<<(max_num - 1) / kBlockSize + 1, kBlockSize, 0, stream_>>>(dev_ptr, max_num);
+
+  curandStatePhilox4_32_10_t* dev_states;
+  ull* dev_ptr;
+
+  cudaMalloc(&dev_states, sizeof(curandStatePhilox4_32_10_t) * cnt);
+  cudaMalloc(&dev_ptr, sizeof(ull) * cnt);
+
+  InitCurand<<<(cnt - 1) / kBlockSize + 1, kBlockSize, 0, stream_>>>(dev_states, 1234ULL);
+  GenerateRandNums<<<(cnt - 1) / kBlockSize + 1, kBlockSize, 0, stream_>>>(dev_states, dev_ptr, cnt, max_num);
+
   cudaEventRecord(stop_, stream_);
   cudaEventSynchronize(stop_);
 
   float elapsed_ms = 0.0f;
   cudaEventElapsedTime(&elapsed_ms, start_, stop_);
 
-  cout << "MakeIncrementalNums_CUDA : " << elapsed_ms << " ms" << endl;
+  cout << __func__ << " : " << elapsed_ms << " ms" << endl;
 
   cudaMemcpyAsync(nums.data(), dev_ptr, sizeof(ull) * nums.size(), cudaMemcpyDeviceToHost, stream_);
-
   cudaStreamSynchronize(stream_);
+
+  cudaFree(dev_states);
   cudaFree(dev_ptr);
 
   cout << "last num for check : " << nums[nums.size() - 1] << endl;
 }
 
-void TestBed::KoggeStoneScan_Entry(vector<ull>& nums) {
+void TestBed::KoggeStoneScan_CUDA(vector<ull>& nums) {
   /**
    * u can see stream use cases in the post below :
    * https://hayunjong83.tistory.com/28
@@ -154,11 +164,9 @@ void TestBed::KoggeStoneScan_Entry(vector<ull>& nums) {
   cudaFree(dev_ptr_odd);
 }
 
-void TestBed::BlellockScan_Entry(vector<ull>& nums) {
+void TestBed::BlellockScan_CUDA(vector<ull>& nums) {}
 
-}
-
-bool TestBed::VerifyResult(const vector<ull>& nums_src, const vector<ull>& nums_res) {
+bool TestBed::VerifyResult_CUDA(const vector<ull>& nums_src, const vector<ull>& nums_res) {
   ull* dev_ptr_src;
   cudaMalloc(&dev_ptr_src, nums_src.size() * sizeof(ull));
 
