@@ -2,6 +2,8 @@
 
 작성일: 2026-09-09 · 대상: Resa / Orche · 상태: research brief (코드 변경 없음)
 
+> 후속: `RESA_CUROBO_DEPLOYED_CASES.md` — 실제 배치·운용 사례(cuMotion 제품 4건, 실명 현장 2건, peer Realtime Robotics, 양팔 실기 연구)와 현장 실패·라이선스 검증. 결론: Conditional 유지(소폭 강화). 정정 1건: Isaac ROS 4.4(2026-04-30)부터 cuMotion 은 cuRobo v0.7.x 소스가 아닌 closed C++ `cumotion` 1.x 바이너리(NVIDIA Isaac ROS Software License)다.
+
 ## 0. 한 줄 판정
 
 **Conditional — "안전 자세·free-space 전이 자동화 PoC 는 Go, force polishing / 티칭 시퀀스 / `core_manipulation` 오케스트레이터 / 양팔 공유물체 협조 대체는 No-Go."**
