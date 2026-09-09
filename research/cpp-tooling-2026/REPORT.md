@@ -5,6 +5,7 @@
 - **Scope bias:** what matters for a robotics shop running ROS 2 C++ nodes (polishing pipelines, camera drivers), real-time-ish Linux, CMake/ament packages.
 - **Confidence tags:** **[High]** = primary source (release notes, official docs, announcement); **[Med]** = reputable secondary or partially verified; **[Low]** = single/opinion source, treat as signal only.
 - Bracketed `[S#]` markers point to the numbered **Sources** list at the end.
+- **Follow-up:** actionable verification checklists/CI gates for the team → [VERIFICATION_PLAYBOOK.md](./VERIFICATION_PLAYBOOK.md) ([TL;DR](./VERIFICATION_TLDR.md)).
 
 ---
 
