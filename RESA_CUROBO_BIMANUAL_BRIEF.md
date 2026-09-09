@@ -1,120 +1,176 @@
-# RESA 브리프 — NVIDIA cuRobo × PLAIF Hyundai wrinkle (`pj_hyundai_wrinkle`) 적용성
+# RESA 브리프 — NVIDIA cuRobo × PLAIF (Hyundai wrinkle 셀 · dual-arm 제품화 · ROS 2)
 
 작성일: 2026-09-09 · 대상: Resa / Orche · 상태: research brief (코드 변경 없음)
 
-## 0. 결론 (한 줄)
+## 0. 한 줄 판정
 
-**Conditional.** cuRobo(V2, Apache-2.0)는 *수동으로 티칭하던 안전/전이 자세(home / ready / drain, `home_left`류 named pose)와 그 사이의 free-space 전이*를 seat·fence·tool·반대팔 장애물 기준으로 **자동 생성·재계획하는 PoC 가치가 있다.** 반면 **force polishing, Z 보정, seat_plan 시맨틱, `core_manipulation` 오케스트레이션, 동시 양팔 공유물체(closed-chain) 협조 교체는 No-Go** — cuRobo 범위 밖이다.
+**Conditional — "안전 자세·free-space 전이 자동화 PoC 는 Go, force polishing / 티칭 시퀀스 / `core_manipulation` 오케스트레이터 / 양팔 공유물체 협조 대체는 No-Go."**
+근거: 이 셀에서 planner 부재로 발생한 실제 비용은 *전이 자세(home/ready/drain, `home_left`류) 수동 티칭과 양팔 간섭 확인*이며, cuRoboV2 의 `plan_cspace`·단일 tree dual-arm·ESDF 가 정확히 그 범위를 겨냥한다. 반면 셀의 본체(force polishing, route 시맨틱, 오케스트레이션)와 동시 양팔 공유물체 협조는 cuRobo 가 다루지 않는다.
 
-## 1. 질문 재정의 (re-lens)
+## 1. 질문 프레임
 
-- 원 질문: "cuRobo가 dual-arm 협조에 좋은가?" → **이 셀에서는 잘못된 질문.** 이 셀의 본체는 seat 위 steam/polish 경로(taught route + force/Z 보정)이며, 현재 스택에는 motion planner가 없어 **안전/전이 자세를 사람이 손으로 티칭**해 왔다(TeachingPendant 경로는 제거, 시퀀스는 core GUI Sequence + `seat_plans` YAML).
-- 재정의: **"장애물(seat, fixture, fence, tool, 반대팔)이 있는 상태에서 home/ready/drain ↔ route 시작·종료점 사이의 collision-free 전이를 cuRobo가 생성/재계획하여 티칭 부담을 줄일 수 있는가?"**
-- 명시적으로 범위 밖(그대로 유지): polishing route, force/Z 보정 루프, `seat_plans` 시맨틱, `core_manipulation` 오케스트레이션, `controller-manager`(ros2_control) 실행 계층, 동시 양팔 공유물체 협조.
+- 원 질문 "cuRobo 가 dual-arm 협조에 좋은가?" 는 이 셀에서는 부차적이다. 셀 본체는 seat 위 steam/polish route(taught route + force/Z 보정)이고, 현재 스택에 motion planner 가 없어 **안전/전이 자세를 사람이 손으로 티칭**해 왔다(TeachingPendant 경로는 제거, 시퀀스는 core GUI Sequence + `seat_plans` YAML).
+- 재정의: (a) wrinkle 셀 — *장애물(seat, fixture, fence, tool, 반대팔) 속 named pose 사이 collision-free 전이를 cuRobo 가 생성/재계획해 티칭 부담을 줄일 수 있는가*; (b) PLAIF dual-arm 제품화 — *cuRobo 를 재사용 가능한 dual-arm 모션 컴포넌트로 삼을 수 있는가, 어디까지인가*; (c) ROS 2 — *현 스택(`core_manipulation` → `controller-manager`, FastDDS/SHM)에 어떻게 꽂히는가*.
+- 범위 밖(그대로 유지): polishing route, force/Z 보정 루프, `seat_plans` 시맨틱, `core_manipulation` 오케스트레이션, `controller-manager`(ros2_control) 실행 계층.
 
-## 2. cuRobo 현황과 이 셀에 관련된 capability / limit (2026-09 기준)
+## 2. cuRobo 현황 (2026-09)
 
-### 2.1 무엇인가
+- GPU(CUDA/PyTorch/Warp) 병렬 모션 라이브러리: FK/IK(배치, collision-free), 충돌 검사(cuboid/mesh/depth→ESDF), trajectory optimization, graph planner, MotionGen, MPC(MPPI). 레거시 문서(v0.7.6): <https://curobo.org/>
+- **cuRoboV2 = v0.8.0 (2026-04-18), Apache-2.0.** "Major refactor, breaks most existing API"; v1 API 필요 시 `v0.7.8` 고정. 레거시 문서는 "business/commercial use 는 cuRoboV2" 명시(v0.7.x 자산 헤더는 NVIDIA 독점 고지). 릴리스 <https://github.com/NVlabs/curobo/releases/tag/v0.8.0> · LICENSE <https://github.com/NVlabs/curobo/blob/main/LICENSE> · v0.7.8 <https://github.com/NVlabs/curobo/tree/v0.7.8>
+- V2 기술 보고서(arXiv 2603.05493): B-spline trajopt + torque limit(RNEA), nvblox 의존 제거한 GPU-native TSDF/ESDF, 고DoF(bimanual/humanoid) 스케일링. <https://arxiv.org/abs/2603.05493> · v1 보고서 <https://arxiv.org/abs/2310.17274>
+- 설치 요건(V2): Ubuntu ≥ 20.04, **GPU > Turing(Ampere 이상), VRAM ≥ 4 GB, driver ≥ 580.65.06**, Python ≥ 3.10, `pip install .[cu12|cu13(-torch)]`. <https://github.com/NVlabs/curobo/blob/main/docs/getting-started/installation.rst>
+- 최근 변화 속도: 2026-04 TSDF feature channel, 2026-06 LiDAR TSDF + **live RealSense RGB-D mapping + MPC**, 2026-07 textured mapper. API 가 아직 월 단위로 움직인다(제품화 리스크, §5.2). <https://github.com/NVlabs/curobo/blob/main/docs/news.rst>
+- ROS 2 제품 경로 = Isaac ROS cuMotion(MoveIt 2 plugin + action server). 4.6.0(2026-08-18), cuMotion 1.1.0. **ROS 2 Jazzy / Ubuntu 24.04 / CUDA 13.2+ / driver 595+**, Jetson Thor·Orin(JetPack 7.2), DGX Spark. <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/index.html>
 
-- GPU(CUDA/PyTorch/Warp) 병렬 로봇 모션 라이브러리: FK/IK(배치, collision-free), 충돌 검사(cuboid/mesh/depth→ESDF), trajectory optimization, graph planner, MotionGen(IK+graph+trajopt), MPC(MPPI 기반). 레거시 문서: <https://curobo.org/>
-- **cuRoboV2 = v0.8.0 (2026-04-18), Apache-2.0 로 공개.** "Major refactor, breaks most existing API"; v1 API가 필요하면 `v0.7.8` 태그 고정. 레거시 문서는 "business/commercial use 는 cuRoboV2 사용" 명시. 릴리스: <https://github.com/NVlabs/curobo/releases/tag/v0.8.0> · LICENSE: <https://github.com/NVlabs/curobo/blob/main/LICENSE> · v1 고정: <https://github.com/NVlabs/curobo/tree/v0.7.8>
-- V2 기술 보고서(arXiv 2603.05493): B-spline trajopt + torque limit(RNEA 역동역학), nvblox 의존 제거한 GPU-native TSDF/ESDF, 고DoF(bimanual/humanoid) 스케일링. <https://arxiv.org/abs/2603.05493> · v1 보고서: <https://arxiv.org/abs/2310.17274>
-- 설치 요건(V2): Ubuntu ≥ 20.04, **NVIDIA GPU > Turing(즉 Ampere 이상), VRAM ≥ 4 GB, driver ≥ 580.65.06**, Python ≥ 3.10, `pip install .[cu12|cu13(-torch)]`. <https://github.com/NVlabs/curobo/blob/main/docs/getting-started/installation.rst>
-- 2026-06-15 업데이트: **live RealSense RGB-D mapping + MPC** 예제, LiDAR TSDF. <https://github.com/NVlabs/curobo/blob/main/docs/news.rst> · 예제: <https://github.com/NVlabs/curobo/blob/main/curobo/examples/reference/live_volumetric_mapping_mpc.py>
+## 3. Deliverable 1 — capability & limit: dual-arm / collision / synchronization / MPC·planning
 
-### 2.2 이 셀 관점 capability 표
+### 3.1 Dual-arm
 
-| 항목 | cuRobo 제공 (근거) | wrinkle 셀 의미 |
+가능한 것
+- 양팔을 **하나의 kinematic tree(단일 URDF, 공통 base)** 로 모델링하고 `tool_frames: ["tool1","tool0"]` 로 두 팔 목표를 한 최적화 문제에서 동시 해결(`dual_ur10e.yml`, 12-joint cspace). V2 <https://github.com/NVlabs/curobo/blob/main/curobo/content/configs/robot/dual_ur10e.yml> · v1 <https://raw.githubusercontent.com/NVlabs/curobo/v0.7.8/src/curobo/content/configs/robot/dual_ur10e.yml>
+- V2 IK 벤치(dual_ur10e, batch 100): IK 6.06 ms / 성공 100 %, collision-free IK 15.6 ms / 성공 99.2 %. <https://github.com/NVlabs/curobo/blob/main/docs/reference/benchmarks.rst>
+- V2 논문은 12-DoF dual-UR10e 를 kinematics·dynamics 벤치 대상으로 포함하고, 분기 kinematic tree(다중 EE) 의 sparse Jacobian·map-reduce self-collision 을 V2 의 핵심 기여로 제시. <https://arxiv.org/abs/2603.05493>
+- 임의 링크에 tool/물체 sphere 부착(V2 `AttachmentManager`; v1 은 기본 EE 만 되는 버그 #553). <https://github.com/NVlabs/curobo/blob/main/curobo/_src/collision/attachment_manager.py> · <https://github.com/NVlabs/curobo/issues/553>
+
+한계
+- NVIDIA 공식 답변: "dual arm motion planning where **both arms need to have a target**. We don't directly support having **one arm static while the other arm is moving** as an API. You can achieve this by using two separate instances of motion planner. These features are **not integrated with MoveIt**." <https://github.com/NVlabs/curobo/issues/349>
+- 레거시 문서: "Multi-Arm motion planning is **experimental** and does not work as well as single arm planning… only meant to be a starting point for research." <https://curobo.org/get_started/2b_isaacsim_examples.html> · 공유 torso 양팔에서 "Plan did not converge" 보고, 유지자 권고는 IK iteration 상향 <https://github.com/NVlabs/curobo/discussions/337>
+- **closed-chain / 상대자세 제약 없음**: 두 tool 간 상대 transform 을 궤적 전 구간에서 강제하는 API 가 없다(목표 시점 pose 만). 공유물체 동시 운반·양손 조립은 범위 밖.
+- 반대팔을 *움직이는* 장애물로 넣는 표준 경로 없음(discussion #345 미답변). <https://github.com/NVlabs/curobo/discussions/345>
+- 문헌: ICRA 2026 SDAR — "cuRobo can compute nice motions for dual-arm systems for **certain pre-specified start/goal configurations**… doing so reliably for **random start/goal configurations remains difficult**"; fallback 없이 cuRobo 만 쓰면 성공률 49 %(SDAR-T+cuRobo) / 11 %(baseline TP+cuRobo), 저자들은 cuRobo IK+MotionGen 위에 rule-based untangling fallback 을 얹어 100 %. <https://arxiv.org/abs/2512.08206> · <https://github.com/arc-l/dual-arm>
+- Isaac ROS cuMotion 은 **단일 매니퓰레이터만**: planning group 2개면 "'JointX' is not in list" 실패, NVIDIA "We currently don't support two manipulators", XRDF `tool_frames` 첫 항목만 사용. <https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/issues/10> · <https://forums.developer.nvidia.com/t/dual-arm-robot-use-isaac-ros-cumotion-with-erroe/336266>
+
+### 3.2 Collision
+
+가능한 것
+- 월드 표현: cuboid / mesh / voxel-ESDF. v1 은 nvblox 연동, **V2 는 GPU-native TSDF/ESDF 내장**(depth 이미지 → dense ESDF, nvblox 대비 2–10× 빠르고 2–8× 적은 메모리, collision recall 92–99 % @10–20 mm voxel). <https://curobo.org/get_started/2c_world_collision.html> · <https://arxiv.org/abs/2603.05493>
+- 로봇 = collision sphere 집합 + self-collision 행렬(XRDF/yml); trajopt 안에서 swept-sphere 충돌 비용; V2 는 sphere fitting 도구(`sphere_fit`)와 self-collision map-reduce 제공. <https://github.com/NVlabs/curobo/blob/main/docs/getting-started/build_robot_model.rst>
+- 배치 collision-free IK 로 reachability/충돌 사전 점검(레거시 `ik_reachability.py`). <https://curobo.org/get_started/2b_isaacsim_examples.html>
+- 실측: RealSense/ZED depth → TSDF → ESDF → planner/MPC 를 한 제어 루프에서 구동(V2 논문 §7.7, 2026-06 live RealSense 예제). <https://github.com/NVlabs/curobo/blob/main/curobo/examples/reference/live_volumetric_mapping_mpc.py>
+
+한계
+- 충돌 회피는 **비용항(cost) 기반**이지 hard constraint 가 아니다. 문서: 제약은 "cost… the trajectory will not reach the exact offset". <https://curobo.org/advanced_examples/3_constrained_planning.html> → 여유(`collision_sphere_buffer`, self-collision buffer)와 **독립 검증기**가 필요.
+- 계획 호출 시점의 **정적 월드 스냅샷**(`update_world(SceneCfg)` 로 갱신). 움직이는 장애물의 swept volume 은 모델링하지 않는다. <https://github.com/NVlabs/curobo/blob/main/curobo/_src/motion/motion_planner.py>
+- depth 기반 장애물의 ghost voxel 위험은 NVIDIA 문서도 인정(nvblox 비활성 + MoveIt scene file 정적 장면을 대안으로 제시). <https://nvidia-isaac-ros.github.io/v/release-4.0/reference_workflows/isaac_for_manipulation/tutorials/pick_and_place/tutorial_pick_and_place.html>
+- sphere 근사 정밀도 = 사용자 책임(steam 노즐·polishing head 는 직접 sphere 정의/부착).
+
+### 3.3 Synchronization
+
+가능한 것
+- 단일 tree 계획은 **한 개의 시간축 위 12-joint 궤적**을 낸다 → 두 팔이 같은 시각에 출발·정지하고, 궤적 전 구간에서 상호 충돌이 같은 최적화에 반영된다(구조적 동기화). `dual_ur10e.yml` cspace 12 joints, `MotionPlanner.plan_cspace/plan_pose` 결과 `get_interpolated_plan()`(고정 `interpolation_dt`). <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/motion_planning.py>
+- 전체 속도 스케일링: v0.7.2 re-timing(계획 간 궤적 속도 변경) <https://curobo.org/>, cuMotion `time_dilation_factor`(기본 0.5)·`interpolation_dt`(0.025 s). <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion/index.html>
+
+한계
+- **팔별 독립 타이밍 없음**: 한 팔만 움직이려면 planner 인스턴스 분리(#349) → 두 인스턴스 사이에 공통 시간축이 없고, 반대팔은 계획 시점의 정적 자세로만 반영된다(3.2).
+- **동기화된 "협조 좌표계" 개념 없음**: ABB MultiMove 의 coordinated work object + `SyncMoveOn` 같은 "물체를 든 팔에 다른 팔이 상대위치를 유지" 기능은 cuRobo 에 없다. <https://search.abb.com/library/Download.aspx?DocumentID=3HAC050961-001>
+- **실행 동기화는 ros2_control 책임**: 12-joint 단일 `joint_trajectory_controller` 면 한 클록으로 실행되지만, 팔별 JTC 2개면 `FollowJointTrajectory` 의 `trajectory.header.stamp` 로 시작 시각을 맞춰야 한다. <https://control.ros.org/master/doc/ros2_controllers/joint_trajectory_controller/doc/userdoc.html>
+
+### 3.4 MPC / Planning
+
+가능한 것
+- 계획 파이프라인: 배치 IK seed → graph planner → 다중 seed trajopt(v1 MotionGen, V2 `MotionPlanner`). V2 벤치(RTX 6000 Ada, 2,600문제): 성공 99.73 %, plan time 평균 38 ms(3 kg torque limit 포함 52 ms); 논문 end-to-end 35/42 ms(RTX 4090). 레거시: UR10 on Jetson Orin 100 ms 이내. <https://github.com/NVlabs/curobo/blob/main/docs/reference/benchmarks.rst> · <https://curobo.org/>
+- V2 만의 것: B-spline 궤적 + **torque limit 강제**(3 kg payload 에서 v1 77 % → V2 99.7 %), goal set(`num_goalset`), grasp 3단계(`plan_grasp`: approach/grasp/lift), joint-space 목표(`plan_cspace`), tool pose 제약(`update_tool_pose_criteria`). <https://github.com/NVlabs/curobo/blob/main/curobo/_src/motion/motion_planner.py>
+- MPC: v1 MPPI 500 Hz(RTX 4090) — 단일 팔; V2 `ModelPredictiveControl.update_goal_tool_poses`, whole-body, 예제 `optimization_dt` 0.025–0.03 s. V2 논문 표 1: MPC 지원 범위 v1 "Single-Arm" → V2 "Whole-Body". <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/reactive_control.py>
+
+한계
+- MPC 는 "**experimental and does not provide safety guarantees**… constraints as cost terms with large weights" (레거시 문서), V2 논문도 MPC 추종 정확도가 IK 보다 낮다고 기술. <https://curobo.org/get_started/2b_isaacsim_examples.html>
+- **힘/임피던스 제어 없음**: 어떤 버전에도 접촉력 제어·Z 보정 기능이 없다(V2 RNEA 는 torque *limit* 검사용).
+- **표면 경로 추종 없음**: 점→점(+goalset, grasp 3단계)만 있고 MoveIt Pilz `LIN/CIRC`+blending 이나 Descartes/noether 류 toolpath 추종 primitive 가 없다.
+- 단일 팔 계획 시간은 최신 SIMD/GPU sampling planner 보다 느리다(pRRTC 논문: Panda 에서 pRRTC 가 cuRobo v1 대비 128× 빠름, VAMP-RRTC 는 그보다 3× 더 빠름 — 단, cuRobo 는 시간-최적·jerk 최소 궤적을 직접 출력). <https://arxiv.org/abs/2503.06757>
+
+### 3.5 요약 매트릭스
+
+| 축 | 가능 | 조건부 | 불가 |
+|---|---|---|---|
+| Dual-arm | 단일 tree 동시 목표, 상호 충돌 회피, 다중 tool 부착 | 한 팔 정지(인스턴스 분리), 임의 start/goal 신뢰성(fallback 필요) | closed-chain/상대자세 제약, cuMotion 경로 |
+| Collision | cuboid/mesh/ESDF, RealSense→ESDF, 배치 C-free IK | depth 노이즈(ghost voxel), sphere 정밀도 | hard-constraint 보증, 동적 장애물 swept volume |
+| Sync | 단일 시간축 12-joint 궤적, 전체 속도 스케일링 | 팔별 JTC 시작 시각 정렬 | 팔별 독립 타이밍, 협조 좌표계(MultiMove류) |
+| MPC/Planning | 수십 ms 계획, torque limit, goal set, grasp 3단계, joint 목표 | MPC(안전 보증 없음), 제약=cost | force/impedance, 표면 경로 추종 |
+
+## 4. Deliverable 2 — dual-arm coordination 대안과 pros/cons
+
+| 스택 (1차 문서) | 장점 | 단점 / PLAIF 판단 |
 |---|---|---|
-| 충돌 월드 | cuboid / mesh / depth→ESDF(V2 내장 TSDF/ESDF; v1은 nvblox). <https://curobo.org/get_started/2c_world_collision.html>, V2 paper §5 | seat(mesh: CAD 또는 RealSense 스캔) + fixture/fence(cuboid) + tool(collision sphere) 모델링 가능. **월드 정확도가 성패를 결정** |
-| Free-space 전이 계획 | `MotionPlanner.plan_cspace(goal_joint, current)` — joint-space 목표로 collision-free 궤적; `plan_pose(GoalToolPose, current)` — pose 목표; 결과는 `interpolation_dt` 로 보간된 joint trajectory. <https://github.com/NVlabs/curobo/blob/main/curobo/_src/motion/motion_planner.py>, <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/motion_planning.py> | **named pose(home/ready/drain) 사이 전이를 티칭 대신 생성**하는 데 정확히 맞는 API. joint-space 목표라 기존 named pose 정의(joint 값)를 그대로 목표로 쓸 수 있음 |
-| 계획 시간·품질 | V2 벤치(RTX 6000 Ada, Franka 2,600문제): 성공 99.73 %, plan time 평균 38 ms(3 kg torque limit 포함 52 ms). <https://github.com/NVlabs/curobo/blob/main/docs/reference/benchmarks.rst>; 레거시: UR10 on Jetson Orin 100 ms 이내 <https://curobo.org/> | 오프라인 생성이면 시간은 무의미; **온라인 재계획(seat 변형/장애물 변화)도 수십~수백 ms 로 가능** |
-| Dual-arm | 양팔을 **하나의 kinematic tree(단일 URDF)** 로 모델링, `tool_frames: ["tool1","tool0"]` 각 팔 목표 동시 지정(`dual_ur10e.yml`). V2 IK 벤치: dual_ur10e IK 6.1 ms / collision-free IK 15.6 ms, 성공 99.2 %. <https://github.com/NVlabs/curobo/blob/main/curobo/content/configs/robot/dual_ur10e.yml>, <https://github.com/NVlabs/curobo/blob/main/docs/reference/benchmarks.rst> | 전이 중 **양팔 상호 충돌 회피는 자연스럽게 포함**(같은 최적화 문제). 한 팔만 움직일 때는 아래 limit 참조 |
-| 제약 계획 | v1 `PoseCostMetric`(축 고정·접근벡터), V2 `update_tool_pose_criteria`. <https://curobo.org/advanced_examples/3_constrained_planning.html> | 노즐 방향 유지 등 전이 구간 제약에 유용. **표면 추종(polishing path)용은 아님** |
-| Reactive/MPC | v1 MPPI 500 Hz(RTX 4090) "experimental, no safety guarantees"; V2 `ModelPredictiveControl.update_goal_tool_poses`, whole-body. <https://curobo.org/get_started/2b_isaacsim_examples.html>, <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/reactive_control.py> | 셀 PoC 범위 밖(안전 보증 없음). 전이 자동화에는 오프라인/온디맨드 `plan_*` 로 충분 |
-| 부착물 | V2 `AttachmentManager` — 임의 링크에 물체 sphere 부착(v1 은 기본 EE 만 지원하던 버그 #553). <https://github.com/NVlabs/curobo/blob/main/curobo/_src/collision/attachment_manager.py>, <https://github.com/NVlabs/curobo/issues/553> | steam 노즐 / polishing head 를 각 팔 tool 로 부착해 충돌 검사 |
+| **cuRoboV2 Python 직접 통합** <https://github.com/NVlabs/curobo> | Apache-2.0; 양팔 단일 tree 동시 최적화; `plan_cspace` 로 named pose 전이; RealSense→ESDF 내장; time-optimal·jerk 최소 궤적; 배치 IK | GPU 필수; ROS 인터페이스·fallback 자작; dual-arm "experimental"; closed-chain 없음; API 변동성 |
+| **Isaac ROS cuMotion** (MoveIt 2 plugin, action `cumotion/move_group`) <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion_moveit/index.html> | NVIDIA 제품 경로·문서·UR 예제; nvblox; `time_dilation_factor` | **단일 매니퓰레이터**, MoveIt 2 필수(현 스택 미사용), Jazzy/24.04 + Isaac ROS 환경 종속. UR 예제는 `scaled_joint_trajectory_controller` 에 `allow_nonzero_velocity_at_trajectory_end=true` 요구 |
+| **MoveIt 2**: 양팔 합친 planning group + OMPL, OMPL constrained planning, MoveIt Task Constructor(MTC), Hybrid Planning <https://moveit.picknik.ai/main/doc/examples/move_group_interface/move_group_interface_tutorial.html> · <https://moveit.picknik.ai/main/doc/how_to_guides/using_ompl_constrained_planning/ompl_constrained_planning.html> · <https://github.com/moveit/moveit_task_constructor> · <https://moveit.picknik.ai/main/doc/concepts/hybrid_planning/hybrid_planning.html> | CPU 만으로 동작; 팔별/합친 group 전환이 자연스러움; MTC 로 stage 단위 양팔 순서·조건 표현; Pilz `PTP/LIN/CIRC`+blending 은 산업 전이에 익숙 <https://moveit.picknik.ai/main/doc/how_to_guides/pilz_industrial_motion_planner/pilz_industrial_motion_planner.html> | 스택에 MoveIt 도입 비용; sampling planner 는 궤적 품질·시간-최적성이 후처리 의존; 양팔 동시 최적화·ESDF 는 약함 |
+| **Tesseract / TrajOpt** (ROS-Industrial) <https://tesseract-docs.readthedocs.io/en/latest/> · <https://github.com/tesseract-robotics/tesseract> | 다중 kinematic group, TrajOpt 최적화, 표면 가공(Scan-N-Plan: noether/Descartes) 계보 <https://github.com/ros-industrial/noether> · <https://github.com/swri-robotics/descartes_light> | 학습 곡선; GPU 가속 없음; 이 셀 route 는 이미 티칭+force 로 해결되어 toolpath 도구는 과함 |
+| **Drake** (TRI) <https://drake.mit.edu/> · IK <https://drake.mit.edu/doxygen_cxx/classdrake_1_1multibody_1_1_inverse_kinematics.html> · KinematicTrajectoryOptimization <https://drake.mit.edu/doxygen_cxx/classdrake_1_1planning_1_1trajectory__optimization_1_1_kinematic_trajectory_optimization.html> · 교재 <https://manipulation.mit.edu/> | **임의 두 frame 사이 position/orientation 제약**을 IK·trajopt 에 직접 추가 → closed-chain/상대자세(공유물체) 협조를 수학적으로 표현 가능; 검증된 최적화 툴체인 | CPU, 실시간성·ROS 2 통합은 자작; 학습 곡선 높음; 산업 지원 없음 |
+| **VAMP / pRRTC** (SIMD-CPU / GPU RRT-Connect) <https://github.com/KavrakiLab/vamp> · <https://arxiv.org/abs/2309.14545> · <https://arxiv.org/abs/2503.06757> | 초고속 계획(µs~ms); VAMP 는 GPU 불필요; **Baxter 14-DoF 양팔 벤치**(`bookshelf_tall_both_arms_*`) 지원 | 연구 코드; 궤적 시간 파라미터화·후처리 별도; ROS/산업 통합 없음 |
+| **Crocoddyl (OCP/MPC, contact 모델)** <https://github.com/loco-3d/crocoddyl> | 접촉·힘을 포함한 whole-body OCP — force 작업까지 수식화 가능 | 연구용; 산업 안전 보증 없음; 이 셀 규모엔 과함 |
+| **벤더 컨트롤러 협조 기능** — 예: ABB MultiMove(coordinated work object, `SyncMoveOn`, ISO 10218-1 에서 하나의 로봇으로 취급) <https://search.abb.com/library/Download.aspx?DocumentID=3HAC050961-001> | 인증·안전 체계 안에서 양팔 동기·협조 좌표계 제공; 공유물체 운반의 산업 표준 해법 | 벤더 종속; 충돌 회피 계획은 없음(경로는 사람이 티칭); PLAIF 스택(ROS 2) 과 이중 구조 |
+| **학습 기반 양팔 정책** — ALOHA/ACT, Isaac Lab RL <https://tonyzhaozh.github.io/aloha/> · <https://isaac-sim.github.io/IsaacLab/> | 시연 데이터로 협조 동작 학습 | 정밀·반복·안전 보증 부재 → 산업 wrinkle 셀 부적합(제품화 R&D 트랙에서만 고려) |
+| **반응형 per-arm 제어** — Isaac Sim RMPflow <https://docs.isaacsim.omniverse.nvidia.com/latest/manipulators/manipulators_rmpflow.html> | 실시간 회피·추종 | 전역 계획 아님, 팔별 독립; 양팔 협조는 별도 상위 로직 필요 |
+| **현행 유지(수동 티칭)** | 검증됨, 추가 HW 없음 | seat 타입/레이아웃 변경마다 재티칭; 양팔 간섭은 사람이 눈으로 확인 |
+| force/접촉(참고, cuRobo 와 독립) — ros2_control `admittance_controller`, FZI `cartesian_controllers`, 벤더 force mode <https://control.ros.org/master/doc/ros2_controllers/admittance_controller/doc/userdoc.html> · <https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers> | 표준 ROS 2 컨트롤러 | polishing 루프는 이 층에서 유지 |
 
-### 2.3 이 셀에 걸리는 limit (정직하게)
+정리: **양팔 "동시 전이 + 상호 충돌 회피 + 부드러운 time-optimal 궤적"** 한정으로 cuRoboV2 가 가장 완성도 높은 OSS 선택지다. **공유물체 협조(closed-chain)** 는 Drake(수식화) 또는 벤더 MultiMove류(인증)가 맞고, **CPU-only 전이 자동화**라면 MoveIt 2(OMPL/Pilz)가 충분할 수 있다 — 이 비교를 PoC 산출물에 포함한다(§6).
 
-1. **힘 제어 없음.** cuRobo 는 운동학적 궤적 생성기다. impedance/admittance, 접촉력, Z 보정은 어떤 버전에도 없다(V2 RNEA 는 torque *limit* 검사용). → polishing 루프는 그대로 CM/벤더 force control.
-2. **표면 경로 추종 없음.** MoveIt Pilz `LIN/CIRC`+blending, Descartes/noether 류 toolpath 추종 primitive 가 없다. 점→점 최적화(+goalset, grasp 3단계)만 있다. → seat 위 route 생성/추종 도구가 아니다.
-3. **Dual-arm 은 "양팔 동시 목표" 모델.** NVIDIA 답변: "dual arm motion planning where **both arms need to have a target**. We don't directly support having one arm static while the other arm is moving as an API. You can achieve this by using two separate instances… **not integrated with MoveIt**." <https://github.com/NVlabs/curobo/issues/349> · 레거시 문서: "Multi-Arm motion planning is **experimental** and does not work as well as single arm planning." <https://curobo.org/get_started/2b_isaacsim_examples.html> · 공유 torso 양팔에서 수렴 실패 보고와 IK iteration 상향 권고: <https://github.com/NVlabs/curobo/discussions/337>
-4. **Closed-chain / 상대자세 제약 없음.** 두 tool 사이 상대 transform 을 궤적 전체에서 강제하는 API 없음(목표 시점 pose 만). → 공유물체 동시 협조는 No-Go.
-5. **반대팔을 동적 장애물로 넣는 표준 경로 없음**(discussion #345 미답변). 실무 해법은 (a) 단일 tree 로 양팔 동시 계획, 또는 (b) 팔별 planner 인스턴스 + 반대팔 현재 자세를 월드에 반영. <https://github.com/NVlabs/curobo/discussions/345>
-6. **ROS 2 제품 경로(Isaac ROS cuMotion)는 단일 매니퓰레이터.** MoveIt planning group 이 2개면 "'JointX' is not in list" 실패, NVIDIA: "We currently don't support two manipulators"; XRDF `tool_frames` 첫 항목만 사용. <https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/issues/10>, <https://forums.developer.nvidia.com/t/dual-arm-robot-use-isaac-ros-cumotion-with-erroe/336266>
-7. **GPU 의존 + 플랫폼 조건.** cuRoboV2 단독: Ampere+ GPU, driver ≥ 580. Isaac ROS 4.6.0(2026-08-18): **ROS 2 Jazzy / Ubuntu 24.04 / CUDA 13.2+ / driver 595+**, Jetson Thor·Orin(JetPack 7.2), DGX Spark. <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/index.html> → 스택이 Humble/22.04 면 cuMotion 경로는 OS/distro 불일치.
-8. **문헌상 dual-arm 신뢰성.** ICRA 2026 SDAR: "cuRobo can compute nice motions for dual-arm systems for **certain pre-specified start/goal configurations**… doing so reliably for **random start/goal** remains difficult"; fallback 없이 쓰면 성공률 49 % / 11 %, 저자들은 cuRobo IK+MotionGen 위에 rule-based untangling fallback 을 얹어 100 % 달성. <https://arxiv.org/abs/2512.08206>, <https://github.com/arc-l/dual-arm> → **PoC 에서도 fallback(재시도·seed 변경·via-pose)과 검증 게이트가 필수.**
-9. **깊이 기반 장애물의 ghost voxel** 위험은 NVIDIA 문서도 인정(nvblox 비활성 + MoveIt scene file 기반 정적 planning scene 을 대안으로 제시). <https://nvidia-isaac-ros.github.io/v/release-4.0/reference_workflows/isaac_for_manipulation/tutorials/pick_and_place/tutorial_pick_and_place.html>
+## 5. Deliverable 3 — PLAIF fit
 
-## 3. 대안 비교 (ROS 2 산업 셀 맥락)
-
-| 후보 | 장점 | 단점 / 이 셀 판단 |
-|---|---|---|
-| **cuRoboV2 Python 직접 통합**(rclpy 노드 또는 오프라인 스크립트) | Apache-2.0; `plan_cspace` 로 named pose 전이 생성; 양팔 단일 tree; ESDF(RealSense) 가능; 부드러운 time-optimal 궤적; 배치 IK 로 reachability 검토 | GPU 필요; ROS 인터페이스 자작; dual-arm "experimental"; fallback 자작 |
-| **Isaac ROS cuMotion**(MoveIt 2 plugin, action `cumotion/move_group`) | 제품화·문서·UR 예제; nvblox 연동; `time_dilation_factor`, `interpolation_dt` 파라미터 | **MoveIt 2 필수**(현 스택 미사용), **단일 매니퓰레이터만**, Jazzy/24.04 + Isaac ROS 환경 종속. UR 예제는 `scaled_joint_trajectory_controller` 의 `allow_nonzero_velocity_at_trajectory_end=true` 요구. <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion_moveit/index.html>, <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion/index.html> |
-| **MoveIt 2 (OMPL/CHOMP) + Pilz Industrial Motion Planner** | CPU 만으로 동작; PTP/LIN/CIRC + blending 은 산업 전이에 익숙; planning group 별 팔 분리 자연스러움 | 스택에 MoveIt 도입 비용; 양팔 동시 최적화 약함; 궤적 품질은 후처리 의존. <https://moveit.picknik.ai/main/doc/how_to_guides/pilz_industrial_motion_planner/pilz_industrial_motion_planner.html> |
-| **VAMP / pRRTC**(SIMD-CPU / GPU sampling planner) | 단일 팔 계획 시간은 cuRobo v1 보다 훨씬 빠름(pRRTC 논문: Panda 에서 pRRTC 가 cuRobo 대비 128×, VAMP-RRTC 는 그보다 3× 더 빠름). VAMP 는 GPU 불필요 | 연구 코드, ROS 통합·산업 지원 없음; 궤적 후처리 필요. <https://arxiv.org/abs/2503.06757>, <https://arxiv.org/abs/2309.14545> |
-| **Tesseract/TrajOpt + noether/Descartes**(ROS-Industrial) | 표면 가공(Scan-N-Plan) 계보 — mesh 위 raster toolpath 생성·추종에 맞음 | 이 셀의 route 는 이미 티칭+force 로 해결; 전이 자동화 목적엔 과함. <https://github.com/tesseract-robotics/tesseract>, <https://github.com/ros-industrial/noether>, <https://github.com/swri-robotics/descartes_light> |
-| **현행 유지(수동 티칭)** | 검증된 방식, 추가 HW 없음 | seat 타입/셀 레이아웃 변경마다 재티칭; 양팔 간섭은 사람이 눈으로 확인 |
-| force/접촉(참고) | ros2_control `admittance_controller`, FZI `cartesian_controllers`, 벤더 force mode | cuRobo 와 무관하게 유지. <https://control.ros.org/master/doc/ros2_controllers/admittance_controller/doc/userdoc.html>, <https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers> |
-
-요약: **전이 자동화 한 가지 목적**에 대해 진짜 경쟁자는 "MoveIt 2 + Pilz/OMPL(CPU)" 이다. cuRobo 의 차별점은 (i) 양팔을 하나의 최적화로 다뤄 상호 간섭을 함께 해소, (ii) time-optimal·jerk 최소 궤적, (iii) RealSense→ESDF 로 seat 형상 변화 반영. 그 대가는 GPU 와 자작 통합이다.
-
-## 4. Changjun/PLAIF wrinkle 스택과의 접점
-
-### 4.1 꽂히는 곳 (plug-in)
+### 5.1 Hyundai wrinkle 셀 (safety-pose transition lens)
 
 ```
 core_manipulation (orchestrator, route as string, seat_plans YAML)
    │  named pose / route 시작·종료 joint state + 현재 joint state + 월드(seat/fixture/fence/tool/반대팔)
    ▼
 [신규] Transition Planner (cuRoboV2)  ── plan_cspace / plan_pose ──► JointTrajectory
-   │  (A) 오프라인: 생성 → 검증 → seat_plans 에 via-pose/trajectory 로 저장
+   │  (A) 오프라인: 생성 → 독립 검증 → seat_plans 에 via-pose/trajectory 로 저장
    │  (B) 온라인: 서비스 호출 → 검증 게이트 → FollowJointTrajectory
    ▼
 controller-manager (ros2_control JTC)  ── 기존과 동일하게 실행 (안전 계층 변경 없음)
 ```
 
-- **(A) 오프라인 생성 모드(1차 권장):** 개발 워크스테이션(GPU)에서 seat 타입별 named pose 전이(home_left ↔ ready ↔ route_start/end ↔ drain)를 일괄 생성하고, 독립 충돌 검사(예: MoveIt/FCL 또는 Isaac Sim)로 재검증한 뒤 `seat_plans` 에 via-pose 또는 궤적으로 넣는다. **셀 PC 에 GPU 가 없어도 되고(Hongjin testbed / plant demo 제약 회피), 런타임 안전성 논리는 "티칭된 pose" 와 동일하게 유지**된다. 이것이 티칭 부담을 가장 직접적으로 줄인다.
-- **(B) 온라인 재계획 모드(2차, 조건부):** seat pose/변형이 카메라(RealSense)로 갱신될 때 `core_manipulation` 이 전이 계획 서비스를 호출. 셀에 Ampere+ GPU(RTX PC 또는 Jetson Orin/Thor) 필요. 궤적은 CM 의 JTC 로 실행되므로 로봇측 안전 기능(속도 스케일링, 보호정지)은 그대로. 계획 실패 시 fallback(재시도 → 사전 검증된 via-pose 경로 → 정지)이 반드시 있어야 함(§2.3-8).
-- **Dual-arm 전이:** 양팔 동시 이동 구간은 단일 tree(`tool_frames` 2개, 또는 `plan_cspace` 로 12-joint 목표)로 한 번에 계획 → 상호 충돌 자동 회피. 한 팔만 이동 구간은 팔별 planner 인스턴스 + 반대팔 현재 자세를 월드 장애물로 반영(§2.3-3,5).
-- **부수 효과:** 배치 collision-free IK 로 새 seat 타입에 대한 reachability/충돌 사전 점검, 기존 티칭 pose 의 충돌 마진 일괄 검사.
+꽂히는 곳
+- **(A) 오프라인 생성(1차 권장):** 개발 워크스테이션(GPU)에서 seat 타입별 named pose 전이(home_left ↔ ready ↔ route_start/end ↔ drain)를 일괄 생성 → 독립 충돌 검사(MoveIt/FCL 또는 Isaac Sim) → `seat_plans` via-pose/궤적으로 저장. **셀 PC 에 GPU 불필요(Hongjin testbed / plant demo 제약 회피), 런타임 안전 논리는 "티칭된 pose" 와 동일.** 티칭 부담을 가장 직접적으로 줄인다.
+- **(B) 온라인 재계획(2차, 조건부):** RealSense 로 seat pose/변형이 갱신될 때 `core_manipulation` 이 전이 계획 서비스를 호출. 셀 GPU(RTX PC 또는 Jetson Orin/Thor) 필요. 궤적은 CM 의 JTC 로 실행되어 로봇측 안전 기능은 그대로. 실패 시 fallback(재시도 → 사전 검증 via-pose 경로 → 정지) 필수(§3.1 SDAR).
+- **양팔 전이:** 동시 이동 구간은 단일 tree 로 한 번에 계획(상호 충돌 자동 회피); 한 팔만 이동 구간은 팔별 인스턴스 + 반대팔 현재 자세를 월드에 반영.
+- **부수 효과:** 배치 C-free IK 로 새 seat 타입 reachability 사전 점검, 기존 티칭 pose 의 충돌 마진 일괄 검사.
 
-### 4.2 꽂히지 않는 곳 (변경 없음)
+꽂히지 않는 곳
+- polishing/steam route(taught + force/Z 보정) — 힘 제어·표면 추종 없음.
+- `seat_plans` 시맨틱, core GUI Sequence, `core_manipulation` 상태기계 — cuRobo 는 planner 이며 task planner 가 아님.
+- `controller-manager`/ros2_control, FastDDS/SHM — 무관.
+- 동시 양팔 공유물체(closed-chain) 협조, MPC 실시간 반응 제어 — 각각 API 부재 / 안전 보증 없음.
 
-- polishing/steam route 자체(taught + force/Z 보정) — cuRobo 에 힘 제어·표면 추종 없음.
-- `seat_plans` 시맨틱, core GUI Sequence, `core_manipulation` 상태기계/오케스트레이션 — cuRobo 는 planner 이며 task planner 가 아님.
-- `controller-manager`/ros2_control, FastDDS/SHM 계층 — 무관.
-- 동시 양팔 공유물체(closed-chain) 협조 — 상대자세 제약 API 부재.
-- MPC 기반 실시간 반응 제어 — "no safety guarantees", 이 셀에 불필요.
+전제·리스크
+- 정확한 셀 모델: 양팔+fixture 단일 URDF, tool collision sphere, seat mesh(CAD/스캔)+캘리브레이션. 월드가 틀리면 "collision-free" 는 무의미.
+- 로봇 드라이버가 외부 JointTrajectory 를 받는지(UR e-Series 는 cuMotion 예제로 검증; 타 벤더 확인 필요).
+- 라이선스: V2 Apache-2.0 으로 상용 문제 해소; v0.7.x 코드/자산 혼용 금지.
 
-### 4.3 전제·리스크 체크리스트
+### 5.2 Dual-arm 제품화 관점
 
-- 정확한 셀 모델: 양팔+fixture 단일 URDF, tool collision sphere, seat mesh(CAD/스캔)와 캘리브레이션. 월드가 틀리면 "collision-free" 는 무의미.
-- 로봇 벤더 드라이버가 JTC 로 외부 궤적을 받는지(UR e-Series 는 cuMotion 예제로 검증됨; 타 벤더는 확인 필요).
-- ROS distro: cuRoboV2 단독은 Python ≥ 3.10 이면 Humble(22.04)에서도 별도 venv 로 가능; Isaac ROS 경로는 Jazzy/24.04 전제.
-- 라이선스: V2 Apache-2.0 으로 상용 문제 해소(v0.7.x 자산은 NVIDIA 독점 고지 — v1 코드/자산 혼용 금지).
+- **역할 정의:** cuRoboV2 는 셀-공통 "collision-aware 모션 컴포넌트"(IK/reachability, 전이 계획, 양팔 동시 계획)로 재사용 가능하다. 셀마다 필요한 입력은 단일 tree URDF + sphere 정의(XRDF/yml) + scene 모델. **협조 로직(순서, 조건, 상태)은 PLAIF 오케스트레이터에 남는다** — cuRobo 는 coordination layer 가 아니다.
+- **제품화에 가능한 것:** 양팔 동시 전이·회피, seat/작업물 변형에 대한 재계획, depth 기반 장애물 반영, 티칭 자동화 도구(오프라인 생성기).
+- **제품화에 빠진 것(다른 스택 필요):** closed-chain/공유물체 협조(Drake 수식화 또는 벤더 MultiMove류), 팔별 비동기 계획(인스턴스 2개 + 자체 조율), force/접촉 작업(ros2_control/벤더), 형식적 안전 보증(cuRobo 는 cost 기반 — 셀 단위 ISO 10218-2 위험평가와 독립 검증기가 대체).
+- **지원 경로 리스크:** NVIDIA 의 지원 제품은 Isaac ROS cuMotion 인데 단일 팔·MoveIt·Jazzy 종속 → dual-arm 은 OSS 직접 통합만 가능. V2 는 출시 5개월, API 월 단위 변동 → **버전 고정 + 내부 인터페이스 뒤에 격리**가 조건.
+- **HW 리스크:** 셀당 Ampere+ GPU(Orin/Thor/RTX) 또는 오프라인 모드. 오프라인 모드는 제품 초기 단계에서 GPU BOM 을 회피하는 현실적 경로.
 
-## 5. 판정
+### 5.3 ROS 2 통합 구체안
 
-**Conditional — "안전 자세·free-space 전이 자동화 PoC 는 Go, polishing/티칭 시퀀스/오케스트레이터 대체는 No-Go."**
-근거: 이 셀에서 planner 부재로 발생한 실제 비용은 *전이 자세 수동 티칭과 양팔 간섭 확인* 이며, 그 문제는 cuRoboV2 의 `plan_cspace`/단일 tree dual-arm/ESDF 가 정확히 겨냥하는 범위다. 반면 셀의 본체(force polishing, route 시맨틱, 오케스트레이션)는 cuRobo 가 다루지 않는다.
+- **노드:** rclpy 노드가 cuRoboV2 를 호스팅(별도 venv: torch + CUDA 12/13). 서비스/액션 예: `PlanTransition{goal: named_pose|joint_goal|tool_pose, arms: L|R|both, scene_rev}` → `trajectory_msgs/JointTrajectory`(12 joint 또는 팔별 6 joint). 오프라인 모드에서는 같은 코드가 CLI 로 `seat_plans` 를 생성.
+- **실행:** 단일 12-joint JTC 면 동기 실행이 보장되고, 팔별 JTC 2개면 `FollowJointTrajectory` 시작 시각을 공통 stamp 로 맞춘다. UR scaled JTC 는 cuMotion 예제대로 `allow_nonzero_velocity_at_trajectory_end` 설정 확인. <https://control.ros.org/master/doc/ros2_controllers/joint_trajectory_controller/doc/userdoc.html>
+- **검증 게이트:** cuRobo 결과를 독립 충돌 검사기(MoveIt planning scene/FCL, 또는 Isaac Sim)로 재검사 후 CM 에 전달. 실패 시 fallback 경로.
+- **월드 입력:** 정적(CAD mesh/cuboid) 우선; 온라인은 RealSense depth → V2 TSDF/ESDF(live 예제) 또는 static scene 으로 대체.
+- **distro:** cuRoboV2 단독은 Python ≥ 3.10 이면 Humble(22.04) 에서도 venv 로 가능; Isaac ROS 4.6 경로는 Jazzy/24.04 전제. FastDDS/SHM 은 영향 없음.
 
-실행 항목:
+## 6. 판정과 실행 항목
 
-1. **PoC 범위 고정:** seat 타입 1종, 전이 3~4개(home_left→ready, ready→route_start, route_end→drain, 양팔 동시 home 복귀). 오프라인 모드(A)만. 성공 기준: 독립 충돌 검사 100 % 통과, 최소 clearance ≥ 정해진 마진(예: 30 mm), 이동 시간 ≤ 현 티칭 경로, 동일 입력에 대해 결정적 재생.
-2. **비교 기준선 병행:** 같은 전이를 MoveIt 2(OMPL 또는 Pilz PTP)로도 생성해 품질·공정 비교. GPU 없이 충분하면 cuRobo 채택 근거가 약해진다 — 그 판단을 PoC 산출물로 남긴다.
-3. **월드 모델 우선 투자:** 양팔+fixture URDF, tool sphere, seat mesh 파이프라인(CAD → 필요 시 RealSense 스캔 보정). 이 자산은 어느 planner 를 택해도 재사용된다.
-4. **통합 방식:** cuRoboV2 Python 직접 사용(Isaac ROS cuMotion 은 단일 팔·MoveIt·Jazzy 종속으로 제외). 출력은 `seat_plans` 호환 via-pose 또는 JointTrajectory 로 표준화.
-5. **온라인 모드(B)는 PoC 결과 후 결정:** 셀 GPU(Jetson Orin/Thor 또는 RTX) 확보와 fallback·검증 게이트 설계가 선행 조건.
-6. **명시적 비목표 공유:** force/Z, route 시맨틱, 오케스트레이션, 공유물체 협조는 이번 라운드에서 cuRobo 로 건드리지 않는다고 팀에 고지.
+**Conditional — 안전 자세·free-space 전이 자동화 PoC 는 Go; force polishing / 티칭 시퀀스 / 오케스트레이터 / 양팔 공유물체 협조 대체는 No-Go.**
 
-## 6. 출처
+1. **PoC 범위 고정:** seat 타입 1종, 전이 3~4개(home_left→ready, ready→route_start, route_end→drain, 양팔 동시 home 복귀). 오프라인 모드(A)만. 성공 기준: 독립 충돌 검사 100 % 통과, 최소 clearance ≥ 정한 마진(예 30 mm), 이동 시간 ≤ 현 티칭 경로, 동일 입력에 결정적 재생.
+2. **비교 기준선 병행:** 같은 전이를 MoveIt 2(OMPL 또는 Pilz PTP)로도 생성해 품질·공정 비교. GPU 없이 충분하면 cuRobo 채택 근거가 약해진다 — 그 판단을 산출물로 남긴다.
+3. **월드 모델 우선 투자:** 양팔+fixture URDF, tool sphere, seat mesh 파이프라인(CAD → 필요 시 RealSense 스캔 보정). 어느 planner 를 택해도 재사용된다.
+4. **통합 방식:** cuRoboV2 Python 직접 사용(Isaac ROS cuMotion 은 단일 팔·MoveIt·Jazzy 종속으로 제외). 버전 고정, 내부 인터페이스 뒤에 격리. 출력은 `seat_plans` 호환 via-pose 또는 JointTrajectory 로 표준화.
+5. **온라인 모드(B)와 제품화 확장은 PoC 결과 후 결정:** 셀 GPU 확보, fallback·검증 게이트, API 변동 대응 비용을 함께 평가.
+6. **비목표 명시:** force/Z, route 시맨틱, 오케스트레이션, 공유물체 협조는 이번 라운드에서 cuRobo 로 건드리지 않는다고 팀에 고지. 공유물체 협조가 제품 요구로 올라오면 Drake/벤더 협조 기능을 별도 평가.
+
+## 7. 출처
 
 - cuRobo 레거시 문서(v0.7.6) <https://curobo.org/> · Isaac Sim/MPC/Multi-Arm 예제 <https://curobo.org/get_started/2b_isaacsim_examples.html> · Constrained planning <https://curobo.org/advanced_examples/3_constrained_planning.html> · World collision <https://curobo.org/get_started/2c_world_collision.html> · Python 예제 <https://curobo.org/get_started/2a_python_examples.html>
 - cuRobo 저장소 <https://github.com/NVlabs/curobo> · v0.8.0 릴리스 <https://github.com/NVlabs/curobo/releases/tag/v0.8.0> · LICENSE <https://github.com/NVlabs/curobo/blob/main/LICENSE> · v0.7.8 <https://github.com/NVlabs/curobo/tree/v0.7.8> · 레거시 dual_ur10e.yml <https://raw.githubusercontent.com/NVlabs/curobo/v0.7.8/src/curobo/content/configs/robot/dual_ur10e.yml>
-- cuRoboV2 소스/문서: MotionPlanner <https://github.com/NVlabs/curobo/blob/main/curobo/_src/motion/motion_planner.py> · motion_planning 예제 <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/motion_planning.py> · reactive_control 예제 <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/reactive_control.py> · live RealSense mapping+MPC <https://github.com/NVlabs/curobo/blob/main/curobo/examples/reference/live_volumetric_mapping_mpc.py> · dual_ur10e.yml(V2) <https://github.com/NVlabs/curobo/blob/main/curobo/content/configs/robot/dual_ur10e.yml> · AttachmentManager <https://github.com/NVlabs/curobo/blob/main/curobo/_src/collision/attachment_manager.py> · 벤치마크 <https://github.com/NVlabs/curobo/blob/main/docs/reference/benchmarks.rst> · 설치 <https://github.com/NVlabs/curobo/blob/main/docs/getting-started/installation.rst> · 뉴스 <https://github.com/NVlabs/curobo/blob/main/docs/news.rst>
-- 논문: cuRoboV2 <https://arxiv.org/abs/2603.05493> · cuRobo(2023) <https://arxiv.org/abs/2310.17274> · SDAR dual-arm TAMP(ICRA 2026) <https://arxiv.org/abs/2512.08206>, <https://github.com/arc-l/dual-arm> · pRRTC <https://arxiv.org/abs/2503.06757> · VAMP <https://arxiv.org/abs/2309.14545> · cuTAMP <https://arxiv.org/abs/2411.11833>
+- cuRoboV2 소스/문서: MotionPlanner <https://github.com/NVlabs/curobo/blob/main/curobo/_src/motion/motion_planner.py> · motion_planning 예제 <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/motion_planning.py> · reactive_control 예제 <https://github.com/NVlabs/curobo/blob/main/curobo/examples/getting_started/reactive_control.py> · live RealSense mapping+MPC <https://github.com/NVlabs/curobo/blob/main/curobo/examples/reference/live_volumetric_mapping_mpc.py> · dual_ur10e.yml(V2) <https://github.com/NVlabs/curobo/blob/main/curobo/content/configs/robot/dual_ur10e.yml> · AttachmentManager <https://github.com/NVlabs/curobo/blob/main/curobo/_src/collision/attachment_manager.py> · Build robot model <https://github.com/NVlabs/curobo/blob/main/docs/getting-started/build_robot_model.rst> · 벤치마크 <https://github.com/NVlabs/curobo/blob/main/docs/reference/benchmarks.rst> · 설치 <https://github.com/NVlabs/curobo/blob/main/docs/getting-started/installation.rst> · 뉴스 <https://github.com/NVlabs/curobo/blob/main/docs/news.rst>
+- 논문: cuRoboV2 <https://arxiv.org/abs/2603.05493> · cuRobo(2023) <https://arxiv.org/abs/2310.17274> · SDAR dual-arm TAMP(ICRA 2026) <https://arxiv.org/abs/2512.08206>, <https://github.com/arc-l/dual-arm> · pRRTC <https://arxiv.org/abs/2503.06757> · VAMP <https://arxiv.org/abs/2309.14545>, <https://github.com/KavrakiLab/vamp> · cuTAMP <https://arxiv.org/abs/2411.11833>
 - 이슈/토론: dual-arm API 답변 <https://github.com/NVlabs/curobo/issues/349> · 공유 torso 수렴 실패 <https://github.com/NVlabs/curobo/discussions/337> · 제2 로봇 장애물 <https://github.com/NVlabs/curobo/discussions/345> · multi-arm attach 버그 <https://github.com/NVlabs/curobo/issues/553> · cuMotion 다중 planning group <https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion/issues/10> · NVIDIA 포럼 "two manipulators 미지원" <https://forums.developer.nvidia.com/t/dual-arm-robot-use-isaac-ros-cumotion-with-erroe/336266>
-- Isaac ROS: cuMotion 개요 <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/index.html> · planner node API <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion/index.html> · MoveIt plugin quickstart <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion_moveit/index.html> · Isaac for Manipulation <https://nvidia-isaac-ros.github.io/reference_workflows/isaac_for_manipulation/index.html> · Bring Your Own Robot(XRDF) <https://nvidia-isaac-ros.github.io/reference_workflows/isaac_for_manipulation/tutorials/tutorial_bring_your_own_robot.html> · Manipulation 개념 <https://nvidia-isaac-ros.github.io/concepts/manipulation/index.html> · nvblox <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_nvblox/index.html> · 저장소 <https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion>
-- 대안: MoveIt Pilz <https://moveit.picknik.ai/main/doc/how_to_guides/pilz_industrial_motion_planner/pilz_industrial_motion_planner.html> · MoveIt Servo <https://moveit.picknik.ai/main/doc/examples/realtime_servo/realtime_servo_tutorial.html> · ros2_control admittance <https://control.ros.org/master/doc/ros2_controllers/admittance_controller/doc/userdoc.html> · FZI cartesian_controllers <https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers> · Tesseract <https://github.com/tesseract-robotics/tesseract> · noether <https://github.com/ros-industrial/noether> · descartes_light <https://github.com/swri-robotics/descartes_light> · Scan-N-Plan <https://github.com/ros-industrial-consortium/scan_n_plan_workshop>
+- Isaac ROS: cuMotion 개요 <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/index.html> · planner node API <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion/index.html> · MoveIt plugin quickstart <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_cumotion/isaac_ros_cumotion_moveit/index.html> · Isaac for Manipulation <https://nvidia-isaac-ros.github.io/reference_workflows/isaac_for_manipulation/index.html> · Pick-and-place 튜토리얼(ghost voxel) <https://nvidia-isaac-ros.github.io/v/release-4.0/reference_workflows/isaac_for_manipulation/tutorials/pick_and_place/tutorial_pick_and_place.html> · Bring Your Own Robot(XRDF) <https://nvidia-isaac-ros.github.io/reference_workflows/isaac_for_manipulation/tutorials/tutorial_bring_your_own_robot.html> · Manipulation 개념 <https://nvidia-isaac-ros.github.io/concepts/manipulation/index.html> · nvblox <https://nvidia-isaac-ros.github.io/repositories_and_packages/isaac_ros_nvblox/index.html> · 저장소 <https://github.com/NVIDIA-ISAAC-ROS/isaac_ros_cumotion>
+- 대안: MoveIt move_group(합친 group) <https://moveit.picknik.ai/main/doc/examples/move_group_interface/move_group_interface_tutorial.html> · OMPL constrained planning <https://moveit.picknik.ai/main/doc/how_to_guides/using_ompl_constrained_planning/ompl_constrained_planning.html> · MoveIt Task Constructor <https://github.com/moveit/moveit_task_constructor>, <https://moveit.picknik.ai/main/doc/tutorials/pick_and_place_with_moveit_task_constructor/pick_and_place_with_moveit_task_constructor.html> · Hybrid Planning <https://moveit.picknik.ai/main/doc/concepts/hybrid_planning/hybrid_planning.html> · Pilz <https://moveit.picknik.ai/main/doc/how_to_guides/pilz_industrial_motion_planner/pilz_industrial_motion_planner.html> · MoveIt Servo <https://moveit.picknik.ai/main/doc/examples/realtime_servo/realtime_servo_tutorial.html> · Tesseract <https://tesseract-docs.readthedocs.io/en/latest/>, <https://github.com/tesseract-robotics/tesseract> · noether <https://github.com/ros-industrial/noether> · descartes_light <https://github.com/swri-robotics/descartes_light> · Scan-N-Plan <https://github.com/ros-industrial-consortium/scan_n_plan_workshop> · Drake <https://drake.mit.edu/>, IK <https://drake.mit.edu/doxygen_cxx/classdrake_1_1multibody_1_1_inverse_kinematics.html>, KinematicTrajectoryOptimization <https://drake.mit.edu/doxygen_cxx/classdrake_1_1planning_1_1trajectory__optimization_1_1_kinematic_trajectory_optimization.html>, 교재 <https://manipulation.mit.edu/> · Crocoddyl <https://github.com/loco-3d/crocoddyl> · ABB MultiMove 매뉴얼 <https://search.abb.com/library/Download.aspx?DocumentID=3HAC050961-001> · ALOHA <https://tonyzhaozh.github.io/aloha/> · Isaac Lab <https://isaac-sim.github.io/IsaacLab/> · Isaac Sim RMPflow <https://docs.isaacsim.omniverse.nvidia.com/latest/manipulators/manipulators_rmpflow.html> · ros2_control JTC <https://control.ros.org/master/doc/ros2_controllers/joint_trajectory_controller/doc/userdoc.html>, admittance <https://control.ros.org/master/doc/ros2_controllers/admittance_controller/doc/userdoc.html> · FZI cartesian_controllers <https://github.com/fzi-forschungszentrum-informatik/cartesian_controllers>
